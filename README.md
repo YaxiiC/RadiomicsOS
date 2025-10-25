@@ -1,2 +1,7 @@
 # RadiomicsOS
 Radiomics-Integrated Deep Learning with Hierarchical Loss for Osteosarcoma Histology Classification
+
+
+Osteosarcoma (OS) is an aggressive primary bone malignancy that predominantly affects children and adolescents. Accurate histopathological assessment of viable versus non-viable tumor regions after neoadjuvant chemotherapy is critical for prognosis and treatment planning, yet manual evaluation remains labor-intensive, subjective, and prone to inter-observer variability. Recent advances in digital pathology have enabled automated necrosis quantification; however, most studies rely on small, single-institution datasets. In particular, prior works based on the TCIA OS Tumor Assessment dataset have used random tile-level data splits, introducing information leakage between training and test sets and leading to inflated performance estimates that poorly reflect real-world generalization.
+
+To address these challenges, we propose a multimodal hierarchical learning framework that integrates image features from convolutional or transformer backbones with handcrafted radiomics descriptors, optimized through a structured two-head loss function with learnable uncertainty weighting. By adopting a patient-level split, our approach prevents data leakage, ensuring fair evaluation and greater clinical relevance, while establishing a robust and interpretable foundation for quantitative OS prognostication and treatment guidance.
