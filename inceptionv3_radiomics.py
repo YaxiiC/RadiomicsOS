@@ -22,7 +22,7 @@ import timm
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     accuracy_score, f1_score, roc_auc_score, classification_report,
-    confusion_matrix, precision_recall_fscore_support
+    confusion_matrix, precision_recall_fscore_support, roc_curve
 )
 from sklearn.preprocessing import label_binarize
 
@@ -461,38 +461,88 @@ class TumorDataset(Dataset):
 # =======================================================================
 # Metrics helpers
 # =======================================================================
+def _sens_spec_at_targets(y_true_bin, y_score, spec_target=0.9, sens_target=0.9):
+    """Return (sensitivity@spec_target, specificity@sens_target)."""
+    if len(np.unique(y_true_bin)) < 2:
+        return float("nan"), float("nan")
+
+    fpr, tpr, _ = roc_curve(y_true_bin, y_score)
+    spec = 1.0 - fpr
+
+    spec_rev = spec[::-1]
+    tpr_rev = tpr[::-1]
+
+    if spec_target < spec_rev[0] or spec_target > spec_rev[-1]:
+        sens_at_spec = float("nan")
+    else:
+        sens_at_spec = float(np.interp(spec_target, spec_rev, tpr_rev))
+
+    if sens_target < tpr[0] or sens_target > tpr[-1]:
+        spec_at_sens = float("nan")
+    else:
+        spec_at_sens = float(np.interp(sens_target, tpr, spec))
+
+    return sens_at_spec, spec_at_sens
+
+
 def compute_overall_and_perclass(y_true, y_pred, y_prob, classes):
+    y_true_arr = np.asarray(y_true)
+    y_prob_arr = np.asarray(y_prob)
     labels_idx = list(range(len(classes)))
-    acc = accuracy_score(y_true, y_pred)
-    f1_mi = f1_score(y_true, y_pred, average="micro")
-    f1_ma = f1_score(y_true, y_pred, average="macro")
-    f1_w = f1_score(y_true, y_pred, average="weighted")
-    try: auc_ovr = roc_auc_score(y_true, y_prob, multi_class="ovr", average="macro")
+    acc = accuracy_score(y_true_arr, y_pred)
+    f1_mi = f1_score(y_true_arr, y_pred, average="micro")
+    f1_ma = f1_score(y_true_arr, y_pred, average="macro")
+    f1_w = f1_score(y_true_arr, y_pred, average="weighted")
+    try: auc_ovr = roc_auc_score(y_true_arr, y_prob_arr, multi_class="ovr", average="macro")
     except: auc_ovr = float("nan")
-    try: auc_ovo = roc_auc_score(y_true, y_prob, multi_class="ovo", average="macro")
+    try: auc_ovo = roc_auc_score(y_true_arr, y_prob_arr, multi_class="ovo", average="macro")
     except: auc_ovo = float("nan")
 
     prec, rec, f1c, support = precision_recall_fscore_support(
-        y_true, y_pred, labels=labels_idx, average=None, zero_division=0
+        y_true_arr, y_pred, labels=labels_idx, average=None, zero_division=0
     )
-    cm = confusion_matrix(y_true, y_pred, labels=labels_idx)
+    cm = confusion_matrix(y_true_arr, y_pred, labels=labels_idx)
     specs = []
     for i in labels_idx:
         TP = cm[i, i]; FP = cm[:, i].sum() - TP; FN = cm[i, :].sum() - TP; TN = cm.sum() - TP - FP - FN
         specs.append(TN / (TN + FP) if (TN + FP) > 0 else float("nan"))
 
     try:
-        Y_bin = label_binarize(y_true, classes=labels_idx)
-        auc_class = [roc_auc_score(Y_bin[:, i], y_prob[:, i]) if Y_bin[:, i].min() != Y_bin[:, i].max() else float("nan") for i in labels_idx]
+        Y_bin = label_binarize(y_true_arr, classes=labels_idx)
+        auc_class = [roc_auc_score(Y_bin[:, i], y_prob_arr[:, i]) if Y_bin[:, i].min() != Y_bin[:, i].max() else float("nan") for i in labels_idx]
     except:
         auc_class = [float("nan")] * len(labels_idx)
 
     per_class = []
+    sens_spec_pairs = []
     for i, c in enumerate(classes):
-        per_class.append(dict(cls=c, support=int(support[i]), precision=prec[i], recall=rec[i],
-                              specificity=specs[i], f1=f1c[i], auc=auc_class[i]))
-    overall = dict(acc=acc, f1_micro=f1_mi, f1_macro=f1_ma, f1_weighted=f1_w,
-                   auc_macro_ovr=auc_ovr, auc_macro_ovo=auc_ovo)
+        sens_at_spec, spec_at_sens = _sens_spec_at_targets(
+            (y_true_arr == i).astype(int), y_prob_arr[:, i]
+        )
+        sens_spec_pairs.append((sens_at_spec, spec_at_sens))
+        per_class.append(
+            dict(
+                cls=c,
+                support=int(support[i]),
+                precision=prec[i],
+                recall=rec[i],
+                specificity=specs[i],
+                sens_at_spec90=sens_at_spec,
+                spec_at_sens90=spec_at_sens,
+                f1=f1c[i],
+                auc=auc_class[i],
+            )
+        )
+    overall = dict(
+        acc=acc,
+        f1_micro=f1_mi,
+        f1_macro=f1_ma,
+        f1_weighted=f1_w,
+        auc_macro_ovr=auc_ovr,
+        auc_macro_ovo=auc_ovo,
+        sens_at_spec90_macro=float(np.nanmean([p[0] for p in sens_spec_pairs])) if sens_spec_pairs else float("nan"),
+        spec_at_sens90_macro=float(np.nanmean([p[1] for p in sens_spec_pairs])) if sens_spec_pairs else float("nan"),
+    )
     return overall, per_class
 
 def print_metrics_block(title, overall, per_class):
@@ -500,12 +550,19 @@ def print_metrics_block(title, overall, per_class):
     print(f"  Accuracy: {overall['acc']:.4f}")
     print(f"  F1 (micro/macro/w): {overall['f1_micro']:.4f} / {overall['f1_macro']:.4f} / {overall['f1_weighted']:.4f}")
     print(f"  Macro AUC (OvR/OvO): {overall['auc_macro_ovr']:.4f} / {overall['auc_macro_ovo']:.4f}")
-    hdr = f"{'Class':<22} {'Support':>7}  {'Prec':>6}  {'Rec':>6}  {'Spec':>6}  {'F1':>6}  {'AUC':>6}"
+    print(f"  Sens@Spec90 (macro): {overall['sens_at_spec90_macro']:.4f}")
+    print(f"  Spec@Sens90 (macro): {overall['spec_at_sens90_macro']:.4f}")
+    hdr = f"{'Class':<22} {'Support':>7}  {'Prec':>6}  {'Rec':>6}  {'Spec':>6}  {'Sens@Spec90':>12}  {'Spec@Sens90':>12}  {'F1':>6}  {'AUC':>6}"
     print("\nPer-class metrics:")
     print(hdr)
     print("-" * len(hdr))
     for r in per_class:
-        print(f"{r['cls']:<22} {r['support']:>7d}  {r['precision']:>6.3f}  {r['recall']:>6.3f}  {r['specificity']:>6.3f}  {r['f1']:>6.3f}  {r['auc']:>6.3f}")
+        print(
+            f"{r['cls']:<22} {r['support']:>7d}  "
+            f"{r['precision']:>6.3f}  {r['recall']:>6.3f}  {r['specificity']:>6.3f}  "
+            f"{r['sens_at_spec90']:>12.3f}  {r['spec_at_sens90']:>12.3f}  "
+            f"{r['f1']:>6.3f}  {r['auc']:>6.3f}"
+        )
 
 # =======================================================================
 # Multimodal model (ATTENTION-BASED fusion)
@@ -752,7 +809,15 @@ def evaluate_model(model, df, classes, artifacts, seeds_eval=[1,2,3,4,5]):
         print(f"{col:>14}: {dfres[col].mean():.4f} ± {dfres[col].std(ddof=1):.4f}")
 
     print("\n=== Per-Class Summary (Mean ± Std) ===")
-    metrics = ["precision", "recall", "specificity", "f1", "auc"]
+    metrics = [
+        "precision",
+        "recall",
+        "specificity",
+        "sens_at_spec90",
+        "spec_at_sens90",
+        "f1",
+        "auc",
+    ]
     rows = []
     for i, cls in enumerate(classes):
         values = {m: [perclass_all[s][i][m] for s in range(len(seeds_eval))] for m in metrics}
@@ -764,7 +829,16 @@ def evaluate_model(model, df, classes, artifacts, seeds_eval=[1,2,3,4,5]):
         })
 
     dfpc = pd.DataFrame(rows)
-    hdr = f"{'Class':<22} {'Prec':>10} {'±':>3} {'Rec':>10} {'±':>3} {'Spec':>10} {'±':>3} {'F1':>10} {'±':>3} {'AUC':>10} {'±':>3}"
+    hdr = (
+        f"{'Class':<22} "
+        f"{'Prec':>10} {'±':>3} "
+        f"{'Rec':>10} {'±':>3} "
+        f"{'Spec':>10} {'±':>3} "
+        f"{'Sens@Spec90':>12} {'±':>3} "
+        f"{'Spec@Sens90':>12} {'±':>3} "
+        f"{'F1':>10} {'±':>3} "
+        f"{'AUC':>10} {'±':>3}"
+    )
     print(hdr)
     print("-" * len(hdr))
     for _, r in dfpc.iterrows():
@@ -773,6 +847,8 @@ def evaluate_model(model, df, classes, artifacts, seeds_eval=[1,2,3,4,5]):
             f"{r['precision_mean']:>10.3f} ±{r['precision_std']:<5.3f} "
             f"{r['recall_mean']:>10.3f} ±{r['recall_std']:<5.3f} "
             f"{r['specificity_mean']:>10.3f} ±{r['specificity_std']:<5.3f} "
+            f"{r['sens_at_spec90_mean']:>12.3f} ±{r['sens_at_spec90_std']:<5.3f} "
+            f"{r['spec_at_sens90_mean']:>12.3f} ±{r['spec_at_sens90_std']:<5.3f} "
             f"{r['f1_mean']:>10.3f} ±{r['f1_std']:<5.3f} "
             f"{r['auc_mean']:>10.3f} ±{r['auc_std']:<5.3f}"
         )
