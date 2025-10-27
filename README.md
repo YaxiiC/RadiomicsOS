@@ -1,19 +1,18 @@
 # RadiomicsOS
 
-RadiomicsOS is a research prototype for multimodal osteosarcoma histology classification. The project couples convolutional features from an InceptionV3 backbone with handcrafted radiomics descriptors and optimizes them jointly through a hierarchical two-head loss. The training loop enforces patient-level data splits to avoid information leakage when working with the TCIA Osteosarcoma Tumor Assessment cohort.
+RadiomicsOS is a research prototype for multimodal osteosarcoma histology classification. The project couples convolutional features from an InceptionV3 backbone with handcrafted radiomics descriptors and optimizes them jointly through a learnable hierarchical two-head loss. 
 
 ## Key features
 
-- **Multimodal learning** – Combines CNN image embeddings with radiomics feature vectors extracted through `torchradiomics` and `SimpleITK`.
+- **Multimodal learning** – Combines CNN image embeddings with radiomics feature vectors extracted through `torchradiomics`.
 - **Hierarchical uncertainty-weighted loss** – Learns separate logits for viable versus non-viable tissue while adapting per-head task weights during training.
-- **Patient-level evaluation** – Supports leave-one-patient-out (LOPO) cross-validation and Monte Carlo dropout evaluation to better approximate clinical deployment scenarios.
-- **Caching utilities** – Automatically caches radiomics features to disk in Parquet or CSV format to accelerate experimentation.
+
 
 ## Repository layout
 
 ```
-├── README.md                     # Project overview and usage guide
-└── inceptionv3_radiomics_2weights.py  # Training, evaluation, and radiomics utilities
+├── README.md                     
+└── inceptionv3_radiomics_2weights.py  
 ```
 
 All of the executable logic lives in `inceptionv3_radiomics_2weights.py`. The script bundles dataset preparation, model definition, training routines, and evaluation helpers.
@@ -73,44 +72,7 @@ python inceptionv3_radiomics_2weights.py
 
 Key training hyperparameters are exposed as module-level constants (`MAX_EPOCHS`, `LR`, augmentation transforms, etc.) for quick experimentation. Checkpoint files are written under `./checkpoints/` (the best patient-split model is saved as `best_patient_split.pt`).
 
-### Leave-one-patient-out cross-validation
 
-To run the LOPO evaluation routine, import the module and call `train_lopo_cv`:
-
-```python
-from inceptionv3_radiomics_2weights import train_lopo_cv
-
-results_df = train_lopo_cv(seed=2025)
-print(results_df)
-```
-
-Each fold trains a fresh model, evaluates it with five Monte Carlo dropout passes, and aggregates the metrics.
-
-## Evaluation
-
-After training, `evaluate_model_5x` performs Monte Carlo dropout evaluation over the held-out patient:
-
-```python
-from inceptionv3_radiomics_2weights import train_model_once, evaluate_model_5x, MC_EVAL_SEEDS
-
-model, artifacts = train_model_once(seed=2025)
-metrics_df, per_case_df = evaluate_model_5x(model, artifacts, seeds_eval=MC_EVAL_SEEDS)
-print(metrics_df.mean())
-```
-
-Evaluation metrics include accuracy, macro F1, ROC-AUC, confusion matrices, and precision/recall per class. Outputs are returned as Pandas DataFrames for convenient analysis and visualization.
-
-## Tips for reproducibility
-
-- Set the `seed` argument when calling `train_model_once` or `train_lopo_cv` to make data splits and weight initialization deterministic.
-- Adjust the `MC_EVAL_SEEDS` list to control how many stochastic evaluation passes are executed.
-- GPU determinism is enforced by disabling cuDNN benchmarking within `set_seed`, but results may still vary slightly across hardware.
-
-## Troubleshooting
-
-- **Missing radiomics features:** ensure the CSV includes the column names referenced inside the dataset loader. The script prints helpful error messages when required columns are absent.
-- **Shape extractor availability:** the code attempts to import `TorchRadiomicsShape2D` and falls back to `TorchRadiomicsShape`. If neither is available, shape features are skipped automatically.
-- **Slow preprocessing:** radiomics extraction can be time-consuming. Use the `RAD_MAX_IMAGES` debug flag to limit the number of processed tiles during dry runs.
 
 ## Citation
 
